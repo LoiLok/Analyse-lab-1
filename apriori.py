@@ -9,11 +9,10 @@ import csv
 from itertools import combinations
 
 
-def load_baskets(path):
-    print(path)
+def load_baskets(path, encoding="cp1251"):
     """Каждая строка файла = одна корзина (заголовка нет)."""
     baskets = []
-    with open(path, encoding="cp1251", newline="") as f:
+    with open(path, encoding=encoding, newline="") as f:
         for row in csv.reader(f):
             items = {c.strip() for c in row if c.strip()}
             if items:
@@ -23,6 +22,8 @@ def load_baskets(path):
 
 def apriori(baskets, min_support):
     """Возвращает словарь {кортеж_товаров: поддержка (доля от 0 до 1)}."""
+    if not 0 < min_support <= 1:
+        raise ValueError("support must be in (0, 1]")
     n = len(baskets)
     if n == 0:
         return {}
@@ -71,19 +72,67 @@ def sort_result(result, order):
     raise ValueError("order должен быть 'support' или 'lex'")
 
 
+def association_rules(frequent, min_confidence=0.7, max_items=None):
+    """Правила (антецедент, консеквент, поддержка, достоверность).
+
+    frequent содержит ВСЕ частые подмножества. Пустые части запрещены.
+    Ограничение max_items относится к суммарному числу объектов.
+    """
+    if not 0 < min_confidence <= 1:
+        raise ValueError("confidence must be in (0, 1]")
+    if max_items is not None and max_items < 2:
+        raise ValueError("max_items must be >= 2")
+    rules = []
+    for union, support in frequent.items():
+        if max_items is not None and len(union) > max_items:
+            continue
+        for size in range(1, len(union)):
+            for antecedent in combinations(union, size):
+                consequent = tuple(x for x in union if x not in antecedent)
+                confidence = support / frequent[antecedent]
+                if confidence + 1e-12 >= min_confidence:
+                    rules.append((antecedent, consequent, support, confidence))
+    return rules
+
+
+def sort_rules(rules, order):
+    if order == 'support':
+        return sorted(rules, key=lambda r: (-r[2], r[0], r[1]))
+    if order == 'lex':
+        return sorted(rules, key=lambda r: (r[0], r[1]))
+    raise ValueError("order must be support or lex")
+
+
+def format_rule(rule):
+    a, c, support, confidence = rule
+    return (f"{{{', '.join(a)}}} → {{{', '.join(c)}}}; "
+            f"поддержка {support:.4%}; достоверность {confidence:.4%}")
+
+
 def main():
-    p = argparse.ArgumentParser(description="Apriori")
-    p.add_argument("dataset")
-    p.add_argument("support", type=float, help="порог поддержки, например 0.05")
-    p.add_argument("order", choices=["support", "lex"], help="порядок вывода")
+    p = argparse.ArgumentParser(description="Apriori и ассоциативные правила")
+    p.add_argument('dataset')
+    p.add_argument('support', type=float)
+    p.add_argument('order', choices=['support', 'lex'])
+    p.add_argument('--confidence', type=float, default=0.7)
+    p.add_argument('--max-items', type=int, default=None)
+    p.add_argument('--encoding', default='cp1251')
+    p.add_argument('--sets-only', action='store_true')
     args = p.parse_args()
+    try:
+        baskets = load_baskets(args.dataset, args.encoding)
+        frequent = apriori(baskets, args.support)
+        rules = association_rules(frequent, args.confidence, args.max_items)
+    except (ValueError, OSError) as e:
+        p.error(str(e))
+    print(f"Корзин: {len(baskets)}; частых наборов: {len(frequent)}")
+    for items, sup in sort_result(frequent, args.order):
+        print(f"{{{', '.join(items)}}}; поддержка {sup:.4%}")
+    if not args.sets_only:
+        print(f"Правил: {len(rules)}")
+        for rule in sort_rules(rules, args.order):
+            print(format_rule(rule))
 
-    baskets = load_baskets(args.dataset)
-    result = apriori(baskets, args.support)
-    print(f"Корзин: {len(baskets)}, порог: {args.support:.2%}, найдено наборов: {len(result)}")
-    for items, sup in sort_result(result, args.order):
-        print(f"{{{', '.join(items)}}}  {sup:.4f} ({sup:.2%})")
 
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
